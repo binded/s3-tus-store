@@ -3,6 +3,7 @@ import toObject from 'to-object-reducer'
 import MeterStream from 'meterstream'
 import { PassThrough } from 'stream'
 import { SizeStream } from 'common-streams'
+// import { inspect } from 'util'
 
 import writePartByPart from './write-part-by-part'
 
@@ -121,6 +122,13 @@ export default ({
   const info = (key) => getKeyInfo(key)
     .then((infoObj) => (
       getKeyOffset(key, infoObj.uploadId)
+        .catch(err => {
+          // we should only get that error when an upload is completed
+          if (err.code === 'NoSuchUpload') {
+            return infoObj.uploadLength
+          }
+          throw err
+        })
         .then(uploadOffset => {
           debug(`uploadOffset is ${uploadOffset}`)
           const result = {
@@ -263,21 +271,17 @@ export default ({
               return
             }
             */
+            const preparePartForParams = ({ ETag, PartNumber }) => ({ ETag, PartNumber })
             const MultipartUpload = {
-              Parts: Parts.map(
-                ({ ETag, PartNumber }) => ({ ETag, PartNumber })
-              ),
+              Parts: Parts.map(preparePartForParams),
             }
             const completeUploadParams = buildParams(key, {
               MultipartUpload,
               UploadId: uploadId,
             })
             debug(completeUploadParams.MultipartUpload)
-            return new Promise((resolve) => {
-              setTimeout(() => { resolve() }, 1000)
-            }).then(() => (
-              client.completeMultipartUpload(completeUploadParams).promise()
-            ))
+            return client.completeMultipartUpload(completeUploadParams)
+              .promise()
           } else if (bytesUploaded < minPartSize) {
             throw new Error(
               `Uploaded ${bytesUploaded} bytes but minPartSize is ${minPartSize} bytes`
