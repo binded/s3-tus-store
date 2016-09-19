@@ -57,11 +57,11 @@ const createBucket = () => (
 )
 
 const setup = () => createBucket()
-  .then(() => initS3Store({ client, bucket, minPartSize: 0 }))
+  .then(() => initS3Store({ client, bucket }))
 
 const teardown = () => clearBucket()
   .then(() => (
     client.deleteBucket({ Bucket }).promise()
   ))
 
-testStore({ setup, teardown })
+testStore({ setup/*, teardown*/ })

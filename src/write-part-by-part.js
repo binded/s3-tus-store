@@ -1,45 +1,85 @@
 import streamSplitter from 'fixed-size-stream-splitter'
+import initDebug from 'debug'
+import { SizeStream } from 'common-streams'
+import { PassThrough } from 'stream'
 
-const calcContentLength = (size, index, maxPartSize) => {
-  if (typeof size === 'undefined') return
-  const bytesRemaining = size - (index * maxPartSize)
-  return Math.min(bytesRemaining, maxPartSize)
+const debug = initDebug('s3-tus-store')
+
+const calcContentLength = (index, partSize, bytesRemaining) => {
+  const currentBytesRemaining = bytesRemaining - (index * partSize)
+  return Math.min(partSize, currentBytesRemaining)
 }
 
-const initUploadPart = (size, client, bucket, key, uploadId, start, maxPartSize) => {
-  let index = 0
-  return (body) => {
-    const partNumber = start + index
-    const contentLength = calcContentLength(size, index, maxPartSize)
-
-    index += 1
-    return client.uploadPart({
-      Bucket: bucket,
-      Key: key,
-      UploadId: uploadId,
-      PartNumber: partNumber,
-      Body: body,
-      ContentLength: contentLength,
-    }).promise().then(({ ETag }) => ({ ETag, PartNumber: partNumber }))
-  }
-}
-
-export default (
-  body,
-  size,
+const initUploadPart = ({
   client,
   bucket,
   key,
   uploadId,
-  partNumber,
-  maxPartSize,
-) => new Promise((resolve, reject) => {
-  const uploadPart = initUploadPart(size, client, bucket, key, uploadId, partNumber, maxPartSize)
+  nextPartNumber,
+  partSize,
+  bytesRemaining,
+}) => {
+  let index = 0
+  return (body) => {
+    const partNumber = nextPartNumber + index
+    const contentLength = calcContentLength(index, partSize, bytesRemaining)
+    index += 1
+
+    const through = new PassThrough()
+
+    const params = {
+      Bucket: bucket,
+      Key: key,
+      UploadId: uploadId,
+      PartNumber: partNumber,
+      Body: through,
+      ContentLength: contentLength,
+    }
+    debug({ ...params, Body: null })
+    const request = client.uploadPart(params)
+
+    // Ensure body is not smaller than content length,
+    // otherwise requests stall indefinitely.
+    let bodySize
+    body
+      .pipe(new SizeStream((byteCount) => {
+        bodySize = byteCount
+        if (byteCount < contentLength) {
+          request.abort()
+        }
+      }))
+      .pipe(through)
+
+    return request
+      .promise()
+      /*
+      .then((response) => {
+        debug(response)
+        return response
+      })
+      */
+      .then(({ ETag }) => ({
+        ETag,
+        PartNumber: partNumber,
+        Size: contentLength,
+      }))
+      .catch((err) => {
+        if (err.code === 'RequestAbortedError') {
+          throw new Error(`body (${bodySize}) smaller than content length (${contentLength})`)
+        }
+        throw err
+      })
+  }
+}
+
+export default (opts = {}) => new Promise((resolve, reject) => {
+  const uploadPart = initUploadPart(opts)
+  const { body, partSize } = opts
   let promise = Promise.resolve()
   let done = false
   const newParts = []
   body
-    .pipe(streamSplitter(maxPartSize, (rs) => {
+    .pipe(streamSplitter(partSize, (rs) => {
       promise = promise.then(() => uploadPart(rs))
         .then(newPart => {
           newParts.push(newPart)

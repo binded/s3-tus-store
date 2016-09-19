@@ -54,7 +54,11 @@ const defaults = {
 	//
 	// If this value is too low, a lot of requests to S3 may be made, depending
 	// on how fast data is coming in. This may result in an eventual overhead.
-  maxPartSize: 6 * 1024 * 1024, // 6 MB
+  // maxPartSize: 6 * 1024 * 1024, // 6 MB
+  //
+  // @oli we set maxPartSize to minPartSize so we dont need
+  // to know content length in advance
+  //
 	// MinPartSize specifies the minimum size of a single part uploaded to S3
 	// in bytes. This number needs to match with the underlying S3 backend or else
 	// uploaded parts will be reject. AWS S3, for example, uses 5MB for this value.
@@ -66,7 +70,7 @@ export default ({
   client,
   bucket,
   minPartSize = defaults.minPartSize,
-  maxPartSize = defaults.maxPartSize,
+  // maxPartSize = defaults.maxPartSize,
 }) => {
   const buildParams = (key, extra) => ({
     Key: key,
@@ -140,9 +144,6 @@ export default ({
       })).promise()
     ))
     .then((data) => {
-      debug(data)
-      // data.AbortDate
-      // data.UploadId
       const uploadId = data.UploadId
       const infoObj = { uploadId, uploadLength, uploadMetadata }
       return setKeyInfo(key, infoObj)
@@ -157,10 +158,19 @@ export default ({
         .promise()
         .then(({ Parts }) => {
           debug(Parts)
-          if (!Parts.length) return 1 // parts are 1-indexed
+          // parts are 1-indexed
+          if (!Parts.length) {
+            return {
+              parts: Parts,
+              nextPartNumber: 1,
+            }
+          }
           const lastPart = Parts[Parts.length - 1]
           const nextPartNumber = lastPart.PartNumber + 1
-          return { parts: Parts, nextPartNumber }
+          return {
+            parts: Parts,
+            nextPartNumber,
+          }
         })
         .then(({ parts, nextPartNumber }) => ({
           uploadId,
@@ -171,60 +181,113 @@ export default ({
         }))
     ))
 
-  const write = (key, rs, { size } = {}) => getWriteInfo(key)
-    .then(({ uploadId, uploadOffset, uploadLength, nextPartNumber, parts }) => {
-      // TODO: only do this if uploadLength is set
-      const bytesRemaining = uploadLength - uploadOffset
-      // Ensure total upload doesn't exeedd uploadLength
-      const meter = new MeterStream(bytesRemaining)
-      let bytesUploaded
-      // Count how many bytes have been uploaded
-      const sizeStream = new SizeStream((byteCount) => {
-        bytesUploaded = byteCount
-      })
-      const body = new PassThrough()
-
-      return new Promise((resolve, reject) => {
-        let done = false
-        // This should only happen with a "malicious" client
-        meter.on('error', (err) => {
-          done = true
-          // TODO: make sure we need to call .end() on body
-          body.end()
-          reject(err)
+  const write = (key, rs) => {
+    // need to do this asap to make sure we don't miss reads
+    const readStream = rs.pipe(new PassThrough())
+    return getWriteInfo(key)
+      .then(({
+        uploadId,
+        uploadOffset,
+        uploadLength,
+        nextPartNumber,
+        parts,
+      }) => {
+        // TODO: only do this if uploadLength is set
+        debug('minPartSize', minPartSize)
+        debug('uploadLength', uploadLength)
+        const bytesRemaining = uploadLength - uploadOffset
+        debug('bytesRemaining', bytesRemaining)
+        // Ensure total upload doesn't exeedd uploadLength
+        const meter = new MeterStream(bytesRemaining)
+        let bytesUploaded
+        // Count how many bytes have been uploaded
+        const sizeStream = new SizeStream((byteCount) => {
+          bytesUploaded = byteCount
         })
-        // Splits body into multiple consecutive part uploads
-        writePartByPart(body, size, client, bucket, key, uploadId, nextPartNumber, maxPartSize)
-          .then((newParts) => {
-            if (done) return
-            resolve(newParts)
-          }, (err) => {
-            if (done) return
+        const body = new PassThrough()
+
+        return new Promise((resolve, reject) => {
+          let done = false
+          // This should only happen with a "malicious" client
+          meter.on('error', (err) => {
+            done = true
+            // TODO: make sure we need to call .end() on body
+            body.end()
             reject(err)
           })
-        rs.pipe(meter).pipe(sizeStream).pipe(body)
+          // Splits body into multiple consecutive part uploads
+          writePartByPart({
+            body,
+            client,
+            bucket,
+            key,
+            uploadId,
+            nextPartNumber,
+            partSize: minPartSize,
+            bytesRemaining,
+          })
+            .then((newParts) => {
+              if (done) return
+              resolve(newParts)
+            }, (err) => {
+              if (done) return
+              reject(err)
+            })
+          readStream.pipe(meter).pipe(sizeStream).pipe(body)
+        })
+        .then((newParts) => {
+          debug(`new parts ${newParts}`)
+          debug(`uploaded ${bytesUploaded} bytes`)
+          // Upload completed!
+          debug(`uploadLength is ${uploadLength}`)
+          debug(`bytesUploaded is ${bytesUploaded}`)
+          if (uploadOffset + bytesUploaded === uploadLength) {
+            debug('Completing upload!')
+            const Parts = [
+              ...parts,
+              ...newParts,
+            ]
+            // console.log(Parts)
+            // Make sure length is right:
+            const sizeOfParts = Parts.map(({ Size }) => Size).reduce((a, b) => a + b, 0)
+            if (sizeOfParts !== uploadLength) {
+              throw new Error(
+                `size of part mismatch, expected ${uploadLength} bytes but got ${sizeOfParts} bytes`
+              )
+            }
+
+            // Last part less than minPartSize implies that S3 auto completed
+            // the upload
+            /*
+            if (Parts[Parts.length - 1].Size < minPartSize) {
+              return
+            }
+            */
+            const MultipartUpload = {
+              Parts: Parts.map(
+                ({ ETag, PartNumber }) => ({ ETag, PartNumber })
+              ),
+            }
+            const completeUploadParams = buildParams(key, {
+              MultipartUpload,
+              UploadId: uploadId,
+            })
+            debug(completeUploadParams.MultipartUpload)
+            return new Promise((resolve) => {
+              setTimeout(() => { resolve() }, 1000)
+            }).then(() => (
+              client.completeMultipartUpload(completeUploadParams).promise()
+            ))
+          } else if (bytesUploaded < minPartSize) {
+            throw new Error(
+              `Uploaded ${bytesUploaded} bytes but minPartSize is ${minPartSize} bytes`
+            )
+          } else {
+            debug('upload not completed yet')
+          }
+        })
       })
-      .then((newParts) => {
-        debug(`uploaded ${bytesUploaded} bytes`)
-        // Upload completed!
-        debug(`uploadLength is ${uploadLength}`)
-        debug(`bytesUploaded is ${bytesUploaded}`)
-        if (uploadOffset + bytesUploaded === uploadLength) {
-          debug('Completing upload!')
-          const Parts = [
-            ...parts,
-            ...newParts,
-          ]
-          const MultipartUpload = { Parts }
-          return client.completeMultipartUpload(buildParams(key, {
-            MultipartUpload,
-            UploadId: uploadId,
-          })).promise()
-        } else if (bytesUploaded < minPartSize) {
-          throw new Error(`Uploaded ${bytesUploaded} bytes but minPartSize is ${minPartSize} bytes`)
-        }
-      })
-    })
+  }
 
   const createReadStream = key => client.getObject(buildParams(key)).createReadStream()
 
@@ -233,5 +296,6 @@ export default ({
     create,
     write,
     createReadStream,
+    minPartSize,
   }
 }
