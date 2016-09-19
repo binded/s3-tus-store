@@ -157,6 +157,7 @@ export default ({
         .promise()
         .then(({ Parts }) => {
           debug(Parts)
+          if (!Parts.length) return 1 // parts are 1-indexed
           const lastPart = Parts[Parts.length - 1]
           const nextPartNumber = lastPart.PartNumber + 1
           return nextPartNumber

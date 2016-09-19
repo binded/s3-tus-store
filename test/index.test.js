@@ -22,17 +22,18 @@ const client = new aws.S3({
   endpoint: new aws.Endpoint(endpoint),
   s3ForcePathStyle: true, // needed for minio
   signatureVersion: 'v4',
+  s3DisableBodySigning: true,
 })
 
-const params = { Bucket: bucket }
+const Bucket = bucket
 
 const clearBucket = () => (
   client
-    .listObjects(params)
+    .listObjects({ Bucket })
     .promise()
     .then(({ Contents }) => {
       const tasks = Contents.map(({ Key }) => (
-        client.deleteObject({ ...params, Key }).promise()
+        client.deleteObject({ Key, Bucket }).promise()
       ))
       return Promise.all(tasks)
     })
@@ -41,14 +42,14 @@ const clearBucket = () => (
 const createBucket = () => (
   clearBucket()
     .then(() => (
-      client.deleteBucket(params).promise()
+      client.deleteBucket({ Bucket }).promise()
     ))
     .catch((err) => {
       if (err.code === 'NoSuchBucket') return
       throw err
     })
     .then(() => (
-      client.createBucket(params).promise()
+      client.createBucket({ Bucket }).promise()
     ))
 )
 
@@ -57,7 +58,7 @@ const setup = () => createBucket()
 
 const teardown = () => clearBucket()
   .then(() => (
-    client.deleteBucket(params).promise()
+    client.deleteBucket({ Bucket }).promise()
   ))
 
 testStore({ setup, teardown })
