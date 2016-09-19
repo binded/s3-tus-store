@@ -118,7 +118,7 @@ export default ({
     .then((infoObj) => (
       getKeyOffset(key, infoObj.uploadId)
         .then(uploadOffset => {
-          debug(uploadOffset)
+          debug(`uploadOffset is ${uploadOffset}`)
           const result = {
             ...infoObj,
             uploadOffset,
@@ -160,26 +160,27 @@ export default ({
           if (!Parts.length) return 1 // parts are 1-indexed
           const lastPart = Parts[Parts.length - 1]
           const nextPartNumber = lastPart.PartNumber + 1
-          return nextPartNumber
+          return { parts: Parts, nextPartNumber }
         })
-        .then((nextPartNumber) => ({
+        .then(({ parts, nextPartNumber }) => ({
           uploadId,
           uploadOffset,
           uploadLength,
           nextPartNumber,
+          parts,
         }))
     ))
 
-  const write = (key, rs) => getWriteInfo(key)
-    .then(({ uploadId, uploadOffset, uploadLength, nextPartNumber }) => {
+  const write = (key, rs, { size } = {}) => getWriteInfo(key)
+    .then(({ uploadId, uploadOffset, uploadLength, nextPartNumber, parts }) => {
       // TODO: only do this if uploadLength is set
       const bytesRemaining = uploadLength - uploadOffset
       // Ensure total upload doesn't exeedd uploadLength
       const meter = new MeterStream(bytesRemaining)
       let bytesUploaded
       // Count how many bytes have been uploaded
-      const sizeStream = new SizeStream((size) => {
-        bytesUploaded = size
+      const sizeStream = new SizeStream((byteCount) => {
+        bytesUploaded = byteCount
       })
       const body = new PassThrough()
 
@@ -193,33 +194,44 @@ export default ({
           reject(err)
         })
         // Splits body into multiple consecutive part uploads
-        writePartByPart(body, client, bucket, key, uploadId, nextPartNumber, maxPartSize)
-          .then(() => {
+        writePartByPart(body, size, client, bucket, key, uploadId, nextPartNumber, maxPartSize)
+          .then((newParts) => {
             if (done) return
-            resolve()
+            resolve(newParts)
           }, (err) => {
             if (done) return
             reject(err)
           })
         rs.pipe(meter).pipe(sizeStream).pipe(body)
       })
-      .then(() => {
+      .then((newParts) => {
         debug(`uploaded ${bytesUploaded} bytes`)
         // Upload completed!
+        debug(`uploadLength is ${uploadLength}`)
+        debug(`bytesUploaded is ${bytesUploaded}`)
         if (uploadOffset + bytesUploaded === uploadLength) {
-          debug('todo: complete upload!')
-          return
+          debug('Completing upload!')
+          const Parts = [
+            ...parts,
+            ...newParts,
+          ]
+          const MultipartUpload = { Parts }
+          return client.completeMultipartUpload(buildParams(key, {
+            MultipartUpload,
+            UploadId: uploadId,
+          })).promise()
         } else if (bytesUploaded < minPartSize) {
-          debug('oops, didnt write enough bytes...')
-          // throw error?
-          return
+          throw new Error(`Uploaded ${bytesUploaded} bytes but minPartSize is ${minPartSize} bytes`)
         }
       })
     })
+
+  const createReadStream = key => client.getObject(buildParams(key)).createReadStream()
 
   return {
     info,
     create,
     write,
+    createReadStream,
   }
 }

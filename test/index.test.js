@@ -25,6 +25,9 @@ const client = new aws.S3({
   s3DisableBodySigning: true,
 })
 
+// hmmmm, tmp workaround for https://github.com/aws/aws-sdk-js/issues/965#issuecomment-247930423
+client.shouldDisableBodySigning = () => true
+
 const Bucket = bucket
 
 const clearBucket = () => (
@@ -54,7 +57,7 @@ const createBucket = () => (
 )
 
 const setup = () => createBucket()
-  .then(() => initS3Store({ client, bucket }))
+  .then(() => initS3Store({ client, bucket, minPartSize: 0 }))
 
 const teardown = () => clearBucket()
   .then(() => (
