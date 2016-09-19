@@ -30,38 +30,35 @@ client.shouldDisableBodySigning = () => true
 
 const Bucket = bucket
 
-const clearBucket = () => (
-  client
-    .listObjects({ Bucket })
-    .promise()
-    .then(({ Contents }) => {
-      const tasks = Contents.map(({ Key }) => (
-        client.deleteObject({ Key, Bucket }).promise()
-      ))
-      return Promise.all(tasks)
-    })
-)
-
-const createBucket = () => (
-  clearBucket()
-    .then(() => (
-      client.deleteBucket({ Bucket }).promise()
-    ))
-    .catch((err) => {
-      if (err.code === 'NoSuchBucket') return
-      throw err
-    })
-    .then(() => (
-      client.createBucket({ Bucket }).promise()
-    ))
-)
-
-const setup = () => createBucket()
-  .then(() => initS3Store({ client, bucket }))
-
-const teardown = () => clearBucket()
-  .then(() => (
-    client.deleteBucket({ Bucket }).promise()
+const clearBucket = async () => {
+  const { Contents } = await client.listObjects({ Bucket }).promise()
+  const tasks = Contents.map(({ Key }) => (
+    client.deleteObject({ Key, Bucket }).promise()
   ))
+  return Promise.all(tasks)
+}
+
+const createBucket = async () => {
+  try {
+    await clearBucket()
+    await client.deleteBucket({ Bucket }).promise()
+  } catch (err) {
+    // ignore NoSuchBucket errors
+    if (err.code !== 'NoSuchBucket') {
+      throw err
+    }
+  }
+  await client.createBucket({ Bucket }).promise()
+}
+
+const setup = async () => {
+  await createBucket()
+  return await initS3Store({ client, bucket })
+}
+
+const teardown = async () => {
+  await clearBucket()
+  return await client.deleteBucket({ Bucket }).promise()
+}
 
 testStore({ setup, teardown })
