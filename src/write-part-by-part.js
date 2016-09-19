@@ -1,24 +1,5 @@
 import streamSplitter from 'fixed-size-stream-splitter'
-/*
-const writePart = (client, key, uploadId, partNumber, rs) => {
-  client.uploadPart(buildParams(key, {
-    UploadId: uploadId,
-    PartNumber: partNumber,
-    Body: body,
-  }), (err) => {
 
-    if (done) return
-      done = true
-        if (err) return reject(err)
-          if (bytesRead < minPartSize) {
-            return reject(
-                new Error(`part was ${bytesRead} bytes, min part size is ${minPartSize} bytes`)
-                )
-          }
-    resolve()
-  })
-}
-*/
 const initUploadPart = (client, bucket, key, uploadId, start) => {
   let index = 0
 
