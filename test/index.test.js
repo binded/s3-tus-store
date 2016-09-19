@@ -64,4 +64,4 @@ const teardown = () => clearBucket()
     client.deleteBucket({ Bucket }).promise()
   ))
 
-testStore({ setup/*, teardown*/ })
+testStore({ setup, teardown })
