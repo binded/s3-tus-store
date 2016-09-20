@@ -249,7 +249,7 @@ export default ({
         ...parts,
         ...newParts,
       ]
-      // console.log(Parts)
+
       // Make sure length is right:
       const sizeOfParts = Parts.map(({ Size }) => Size).reduce((a, b) => a + b, 0)
       if (sizeOfParts !== uploadLength) {
@@ -258,13 +258,6 @@ export default ({
         )
       }
 
-      // Last part less than minPartSize implies that S3 auto completed
-      // the upload
-      /*
-      if (Parts[Parts.length - 1].Size < minPartSize) {
-        return
-      }
-      */
       const preparePartForParams = ({ ETag, PartNumber }) => ({ ETag, PartNumber })
       const MultipartUpload = {
         Parts: Parts.map(preparePartForParams),
