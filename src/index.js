@@ -45,24 +45,24 @@ import writePartByPart from './write-part-by-part'
 const debug = initDebug('s3-tus-store')
 
 const defaults = {
-	// MaxPartSize specifies the maximum size of a single part uploaded to S3
-	// in bytes. This value must be bigger than minPartSize! In order to
-	// choose the correct number, two things have to be kept in mind:
-	//
-	// If this value is too big and uploading the part to S3 is interrupted
-	// unexpectedly, the entire part is discarded and the end user is required
-	// to resume the upload and re-upload the entire big part.
-	//
-	// If this value is too low, a lot of requests to S3 may be made, depending
-	// on how fast data is coming in. This may result in an eventual overhead.
+  // MaxPartSize specifies the maximum size of a single part uploaded to S3
+  // in bytes. This value must be bigger than minPartSize! In order to
+  // choose the correct number, two things have to be kept in mind:
+  //
+  // If this value is too big and uploading the part to S3 is interrupted
+  // unexpectedly, the entire part is discarded and the end user is required
+  // to resume the upload and re-upload the entire big part.
+  //
+  // If this value is too low, a lot of requests to S3 may be made, depending
+  // on how fast data is coming in. This may result in an eventual overhead.
   // maxPartSize: 6 * 1024 * 1024, // 6 MB
   //
   // @oli we set maxPartSize to minPartSize so we dont need
   // to know content length in advance
   //
-	// MinPartSize specifies the minimum size of a single part uploaded to S3
-	// in bytes. This number needs to match with the underlying S3 backend or else
-	// uploaded parts will be reject. AWS S3, for example, uses 5MB for this value.
+  // MinPartSize specifies the minimum size of a single part uploaded to S3
+  // in bytes. This number needs to match with the underlying S3 backend or else
+  // uploaded parts will be reject. AWS S3, for example, uses 5MB for this value.
   minPartSize: 5 * 1024 * 1024,
 }
 
