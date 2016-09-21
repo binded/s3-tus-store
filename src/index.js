@@ -8,6 +8,7 @@ import { errors } from 'abstract-tus-store'
 
 import writePartByPart from './write-part-by-part'
 
+// TODO: docs below slightly outdated!
 // Inspired by https://github.com/tus/tusd/blob/master/s3store/s3store.go
 //
 // Configuration
