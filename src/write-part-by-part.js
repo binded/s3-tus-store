@@ -3,92 +3,143 @@ import initDebug from 'debug'
 import { SizeStream } from 'common-streams'
 import { PassThrough } from 'stream'
 
+import createTmpFile from './tmp-file'
+
 const debug = initDebug('s3-tus-store')
 
-const calcContentLength = (index, partSize, bytesRemaining) => {
-  const currentBytesRemaining = bytesRemaining - (index * partSize)
-  return Math.min(partSize, currentBytesRemaining)
-}
-
-const initUploadPart = ({
+const uploadPart = async (rs, guessedPartSize, partNumber, {
   client,
   bucket,
-  key,
   uploadId,
-  nextPartNumber,
-  partSize,
-  bytesRemaining,
+  minPartSize,
 }) => {
-  let index = 0
-  return (body) => {
-    const partNumber = nextPartNumber + index
-    const contentLength = calcContentLength(index, partSize, bytesRemaining)
-    index += 1
+  //
+  // Optimistically guess that Content-Length is guessedPartSize
+  // but keep a temporary copy on disk in case the stream ends
+  // before we reached have "guessedPartSize"
+  //
+  // If the actual part size is > minPartSize, write part with
+  // content-length = actual part size
+  //
+  // Otherwise, there is not much we can do, short of temporarily
+  // writing the data to S3 key and waiting for the next call to
+  // to .append() to read it, merge it with the new stream
+  // and write to a new part.... But that is a TODO!
+  //
 
-    const through = new PassThrough()
+  const through = rs.pipe(new PassThrough())
+  const Body = new PassThrough()
+  const request = client.uploadPart({
+    Body,
+    Bucket: bucket,
+    UploadId: uploadId,
+    PartNumber: partNumber,
+    ContentLength: guessedPartSize,
+  })
 
-    const params = {
+  // Ensure body is not smaller than content length,
+  // otherwise requests stall indefinitely.
+  const tmpFile = await createTmpFile()
+  debug(tmpFile.path)
+
+  const fileWrittenPromise = new Promise((resolve, reject) => {
+    through
+      .pipe(tmpFile.createWriteStream())
+      .on('error', (err) => reject(err))
+      .on('finish', () => resolve())
+  })
+  const streamSizePromise = new Promise((resolve) => {
+    through
+      .pipe(new SizeStream((byteCount) => {
+        resolve(byteCount)
+      }))
+      .pipe(Body)
+  })
+
+  let actualSize
+  streamSizePromise.then((size) => {
+    actualSize = size
+    if (size < guessedPartSize) {
+      request.abort()
+    }
+  })
+  // stream was shorter than we expected,
+  // we aborted the request. now, let's make sure
+  // tmp file is written and try to upload its content
+  // with correct content length
+  const planB = async () => {
+    // Nothing we can do.. short of uploading to a S3 key...
+    // and rewriting later when we have a new write? TODO
+    if (actualSize < minPartSize) {
+      tmpFile.rm() // dont need wait for this...
+      return
+    }
+    // make sure file completely written to disk...
+    await fileWrittenPromise
+    const result = await client.uploadPart({
+      Body: tmpFile.createReadStream(),
       Bucket: bucket,
-      Key: key,
       UploadId: uploadId,
       PartNumber: partNumber,
-      Body: through,
-      ContentLength: contentLength,
-    }
-    debug({ ...params, Body: null })
-    const request = client.uploadPart(params)
-
-    // Ensure body is not smaller than content length,
-    // otherwise requests stall indefinitely.
-    let bodySize
-    body
-      .pipe(new SizeStream((byteCount) => {
-        bodySize = byteCount
-        if (byteCount < contentLength) {
-          request.abort()
-        }
-      }))
-      .pipe(through)
-
-    return request
-      .promise()
-      /*
-      .then((response) => {
-        debug(response)
-        return response
-      })
-      */
-      .then(({ ETag }) => ({
-        ETag,
-        PartNumber: partNumber,
-        Size: contentLength,
-      }))
-      .catch((err) => {
-        if (err.code === 'RequestAbortedError') {
-          throw new Error(`body (${bodySize}) smaller than content length (${contentLength})`)
-        }
-        throw err
-      })
+      ContentLength: actualSize,
+    })
+    tmpFile.rm() // dont need wait for this
+    // TODO: put whole function in try/catch to make sure tmpfile
+    // remove even when errors...
+    return result
   }
+
+  const planA = () => request
+    .promise()
+    .catch((err) => {
+      if (err.code === 'RequestAbortedError') {
+        return planB()
+      }
+      throw err
+    })
+    .then(({ ETag }) => ({
+      ETag,
+      PartNumber: partNumber,
+      Size: guessedPartSize,
+    }))
+  return planA()
 }
 
 export default (opts = {}) => new Promise((resolve, reject) => {
-  const uploadPart = initUploadPart(opts)
-  const { body, partSize } = opts
-  let promise = Promise.resolve()
+  const {
+    body,
+    maxPartSize,
+    bytesLimit,
+    nextPartNumber,
+  } = opts
   let done = false
+  let promise = Promise.resolve()
+
+  let splitIndex = 0
   const newParts = []
+  const onSplit = (rs) => {
+    if (done) return
+    const partNumber = nextPartNumber + splitIndex
+    const bytesWritten = splitIndex * maxPartSize
+    const bytesRemaining = bytesLimit - bytesWritten
+    const guessedPartSize = Math.min(bytesRemaining, maxPartSize)
+    // wait for previous uploadPart operation to complete
+    promise = promise
+      .then(() => (
+        uploadPart(rs, guessedPartSize, partNumber, opts)
+      ))
+      .then(newPart => {
+        newParts.push(newPart)
+      })
+      .catch((err) => {
+        done = true
+        reject(err)
+      })
+    splitIndex += 1
+  }
+
   body
-    .pipe(streamSplitter(partSize, (rs) => {
-      promise = promise.then(() => uploadPart(rs))
-        .then(newPart => {
-          newParts.push(newPart)
-        })
-        .catch((err) => {
-          done = true
-          reject(err)
-        })
-    }))
+    .pipe(streamSplitter(maxPartSize, onSplit))
     .on('finish', () => {
       if (done) return
       // Make sure all upload part promises are completed...
