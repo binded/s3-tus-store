@@ -2,7 +2,7 @@
 
 [![Build Status](https://travis-ci.org/blockai/s3-tus-store.svg?branch=master)](https://travis-ci.org/blockai/s3-tus-store)
 
-WIP
+[![tus-store-compatible](https://github.com/blockai/abstract-tus-store/raw/master/badge.png)](https://github.com/blockai/abstract-tus-store)
 
 ## Install
 
