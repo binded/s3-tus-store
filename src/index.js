@@ -68,6 +68,7 @@ const defaults = {
 }
 
 // TODO: optional TTL?
+// TODO: MAKE SURE UPLOADID IS UNIQUE REGARDLESS OF KEY
 export default ({
   client,
   bucket,
@@ -120,6 +121,7 @@ export default ({
     debug(Parts)
     return Parts
   }
+
   const countSizeFromParts = (parts) => parts
     .map(({ Size }) => Size)
     .reduce((total, size) => total + size, 0)
@@ -156,6 +158,14 @@ export default ({
     const upload = await getUpload(uploadId)
     debug(upload)
     const offset = await getUploadOffset(uploadId, upload.key)
+      .catch(err => {
+        // we got the upload file but upload part does not exist
+        // that means the upload is actually completed.
+        if (err.code === 'NoSuchUpload') {
+          return upload.uploadLength
+        }
+        throw err
+      })
     return {
       offset,
       ...upload,
@@ -168,9 +178,10 @@ export default ({
     return meterStream
   }
 
-  const afterWrite = async (uploadId, uploadLength, parts) => {
+  const afterWrite = async (uploadId, uploadLength, key, parts) => {
     const offset = await getUploadOffset(parts)
     // Upload complete!
+    debug(`offset = ${offset}`)
     if (offset === uploadLength) {
       debug('Completing upload!')
         // TODO: completeMultipartUpload
@@ -180,6 +191,7 @@ export default ({
       const completeUploadParams = buildParams(null, {
         MultipartUpload,
         UploadId: uploadId,
+        Key: key,
       })
       debug(completeUploadParams.MultipartUpload)
       await client
@@ -234,7 +246,7 @@ export default ({
 
     // Parts are 1-indexed
     const nextPartNumber = parts.length
-      ? parts[parts.length - 1].PartNumber
+      ? parts[parts.length - 1].PartNumber + 1
       : 1
 
     const bytesLimit = Number.isInteger(upload.uploadLength) ?
@@ -248,12 +260,14 @@ export default ({
       maxPartSize,
       minPartSize,
       bytesLimit,
+      key: upload.key,
       body: through.pipe(limitStream), // .pipe(sizeStream),
     })
 
-    debug(`new parts ${newParts}`)
+    debug('new parts:')
+    debug(newParts)
 
-    await afterWrite(uploadId, upload.uploadLength, [
+    return afterWrite(uploadId, upload.uploadLength, upload.key, [
       ...parts,
       ...newParts,
     ])

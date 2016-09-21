@@ -4,9 +4,9 @@ import { join } from 'path'
 
 export default async (prefix = 's3-tus-store') => {
   const dir = await new Promise((resolve, reject) => {
-    fs.mkdtemp(join(os.tmpdir(), prefix), (err) => {
+    fs.mkdtemp(join(os.tmpDir(), prefix), (err, result) => {
       if (err) return reject(err)
-      resolve()
+      resolve(result)
     })
   })
   const path = join(dir, 'tmpfile')

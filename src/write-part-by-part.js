@@ -12,6 +12,7 @@ const uploadPart = async (rs, guessedPartSize, partNumber, {
   bucket,
   uploadId,
   minPartSize,
+  key,
 }) => {
   //
   // Optimistically guess that Content-Length is guessedPartSize
@@ -29,11 +30,17 @@ const uploadPart = async (rs, guessedPartSize, partNumber, {
 
   const through = rs.pipe(new PassThrough())
   const Body = new PassThrough()
-  const request = client.uploadPart({
-    Body,
+
+  const baseParams = {
+    Key: key,
     Bucket: bucket,
     UploadId: uploadId,
     PartNumber: partNumber,
+  }
+
+  const request = client.uploadPart({
+    Body,
+    ...baseParams,
     ContentLength: guessedPartSize,
   })
 
@@ -70,38 +77,52 @@ const uploadPart = async (rs, guessedPartSize, partNumber, {
   const planB = async () => {
     // Nothing we can do.. short of uploading to a S3 key...
     // and rewriting later when we have a new write? TODO
+    debug('plan B')
+    debug(`actualSize = ${actualSize}`)
+    debug(`minPartSize = ${minPartSize}`)
     if (actualSize < minPartSize) {
       tmpFile.rm() // dont need wait for this...
       return
     }
     // make sure file completely written to disk...
     await fileWrittenPromise
-    const result = await client.uploadPart({
+    const { ETag } = await client.uploadPart({
+      ...baseParams,
       Body: tmpFile.createReadStream(),
-      Bucket: bucket,
-      UploadId: uploadId,
-      PartNumber: partNumber,
       ContentLength: actualSize,
-    })
+    }).promise()
+
     tmpFile.rm() // dont need wait for this
+
     // TODO: put whole function in try/catch to make sure tmpfile
     // remove even when errors...
-    return result
+    return {
+      ETag,
+      PartNumber: partNumber,
+      Size: actualSize,
+    }
   }
 
   const planA = () => request
     .promise()
-    .catch((err) => {
-      if (err.code === 'RequestAbortedError') {
-        return planB()
-      }
-      throw err
-    })
     .then(({ ETag }) => ({
       ETag,
       PartNumber: partNumber,
       Size: guessedPartSize,
     }))
+    .catch((err) => {
+      if (err.code === 'RequestAbortedError') {
+        debug('request aborted')
+        return planB()
+      }
+      throw err
+    })
+    /*
+    .then((result) => {
+      debug(result)
+      return result
+    })
+    */
   return planA()
 }
 
