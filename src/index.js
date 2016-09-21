@@ -3,6 +3,7 @@ import toObject from 'to-object-reducer'
 import MeterStream from 'meterstream'
 import { PassThrough } from 'stream'
 import { SizeStream } from 'common-streams'
+import { errors } from 'abstract-tus-store'
 // import { inspect } from 'util'
 
 import writePartByPart from './write-part-by-part'
@@ -55,7 +56,7 @@ const defaults = {
   //
   // If this value is too low, a lot of requests to S3 may be made, depending
   // on how fast data is coming in. This may result in an eventual overhead.
-  // maxPartSize: 6 * 1024 * 1024, // 6 MB
+  maxPartSize: 6 * 1024 * 1024, // 6 MB
   //
   // @oli we set maxPartSize to minPartSize so we dont need
   // to know content length in advance
@@ -71,15 +72,13 @@ export default ({
   client,
   bucket,
   minPartSize = defaults.minPartSize,
-  // maxPartSize = defaults.maxPartSize,
+  maxPartSize = defaults.maxPartSize,
 }) => {
   const buildParams = (key, extra) => ({
     Key: key,
     Bucket: bucket,
     ...extra,
   })
-
-  const infoKey = (key) => `${key}.info`
 
   const buildS3Metadata = (uploadMetadata = {}) => {
     const metadata = uploadMetadata
@@ -91,98 +90,66 @@ export default ({
       .reduce(toObject, {})
   }
 
-  const setKeyInfo = async (key, info) => {
-    const infoJson = JSON.stringify(info)
-    return await client
-      .putObject(buildParams(infoKey(key), {
-        Body: infoJson,
-        ContentLength: infoJson.length,
-      }))
-      .promise()
-  }
-
-  const getKeyInfo = async key => {
+  const getUploadKey = (uploadId) => `tus-uploads/${uploadId}`
+  const getUpload = async (uploadId) => {
     const { Body } = await client
-      .getObject(buildParams(infoKey(key)))
+      .getObject(buildParams(getUploadKey(uploadId)))
       .promise()
-    const info = JSON.parse(Body.toString())
-    return info
-  }
-
-  const getKeyOffset = async (key, uploadId) => {
-    const { Parts } = await client
-      .listParts(buildParams(key, {
-        UploadId: uploadId,
-      }))
-      .promise()
-    // get size of all parts
-    return Parts
-      .map(({ Size }) => Size)
-      // sum size of all parts
-      .reduce((total, size) => total + size, 0)
-  }
-
-  const info = async key => {
-    const infoObj = await getKeyInfo(key)
-    const uploadOffset = await getKeyOffset(key, infoObj.uploadId)
-      .catch(err => {
-        // we should only get that error when an upload is completed
+      .catch((err) => {
         if (err.code === 'NoSuchUpload') {
-          return infoObj.uploadLength
+          throw new errors.UploadNotFound(uploadId)
         }
         throw err
       })
-    debug(`uploadOffset is ${uploadOffset}`)
-    return {
-      ...infoObj,
-      uploadOffset,
-    }
+    return JSON.parse(Body)
   }
 
-  // TODO: make sure not already created?
-  // TODO: save uploadMetadata in a JSON string?
-  // in case it might contain a uploadLength key...
+  const saveUpload = async (uploadId, upload) => {
+    const key = getUploadKey(uploadId)
+    const json = JSON.stringify(upload)
+    await client.putObject(buildParams(key, {
+      Body: json,
+      ContentLength: json.length,
+    })).promise()
+  }
+
+  const getUploadOffset = async (uploadId) => {
+    const { Parts } = await client.listParts(buildParams(null, {
+      UploadId: uploadId,
+    })).promise()
+    // sum size of all parts
+    return Parts
+      .map(({ Size }) => Size)
+      .reduce((total, size) => total + size, 0)
+  }
+
   const create = async (key, {
     uploadLength,
-    uploadMetadata = {},
+    metadata = {},
   }) => {
     const { UploadId } = await client.createMultipartUpload(buildParams(key, {
-      Metadata: buildS3Metadata(uploadMetadata),
+      Metadata: buildS3Metadata(metadata),
     })).promise()
     const uploadId = UploadId
-    const infoObj = { uploadId, uploadLength, uploadMetadata }
-    return setKeyInfo(key, infoObj)
-  }
-
-  const getWriteInfo = async (key) => {
-    const { uploadId, uploadOffset, uploadLength } = await info(key)
-    const { Parts } = await client
-      .listParts(buildParams(key, {
-        UploadId: uploadId,
-      }))
-      .promise()
-
-    const parts = Parts
-
-    // parts are 1-indexed
-    let nextPartNumber
-    if (!parts.length) {
-      nextPartNumber = 1
-    } else {
-      const lastPart = parts[parts.length - 1]
-      nextPartNumber = lastPart.PartNumber + 1
-    }
-
-    return {
-      uploadId,
-      uploadOffset,
+    const upload = {
+      key,
       uploadLength,
-      nextPartNumber,
-      parts,
+      metadata,
+    }
+    await saveUpload(uploadId, upload)
+    return { uploadId }
+  }
+
+  const info = async uploadId => {
+    const upload = await getUpload(uploadId)
+    const offset = await getUploadOffset(uploadId)
+    return {
+      offset,
+      ...upload,
     }
   }
 
-  const write = async (key, rs) => {
+  const append = async (key, rs) => {
     // need to do this asap to make sure we don't miss reads
     const readStream = rs.pipe(new PassThrough())
     const {
@@ -194,10 +161,7 @@ export default ({
     } = await getWriteInfo(key)
 
     // TODO: only do this if uploadLength is set
-    debug('minPartSize', minPartSize)
-    debug('uploadLength', uploadLength)
     const bytesRemaining = uploadLength - uploadOffset
-    debug('bytesRemaining', bytesRemaining)
     // Ensure total upload doesn't exeedd uploadLength
     const meter = new MeterStream(bytesRemaining)
     let bytesUploaded
@@ -278,13 +242,110 @@ export default ({
     }
   }
 
-  const createReadStream = key => client.getObject(buildParams(key)).createReadStream()
+  /*
+  const write = async (key, rs) => {
+    // need to do this asap to make sure we don't miss reads
+    const readStream = rs.pipe(new PassThrough())
+    const {
+      uploadId,
+      uploadOffset,
+      uploadLength,
+      nextPartNumber,
+      parts,
+    } = await getWriteInfo(key)
+
+    // TODO: only do this if uploadLength is set
+    const bytesRemaining = uploadLength - uploadOffset
+    // Ensure total upload doesn't exeedd uploadLength
+    const meter = new MeterStream(bytesRemaining)
+    let bytesUploaded
+    // Count how many bytes have been uploaded
+    const sizeStream = new SizeStream((byteCount) => {
+      bytesUploaded = byteCount
+    })
+    const body = new PassThrough()
+
+    const newParts = await new Promise((resolve, reject) => {
+      let done = false
+      // This should only happen with a "malicious" client
+      meter.on('error', (err) => {
+        done = true
+        // TODO: make sure we need to call .end() on body
+        body.end()
+        reject(err)
+      })
+      // Splits body into multiple consecutive part uploads
+      writePartByPart({
+        body,
+        client,
+        bucket,
+        key,
+        uploadId,
+        nextPartNumber,
+        partSize: minPartSize,
+        bytesRemaining,
+      })
+        .then((result) => {
+          if (done) return
+          resolve(result)
+        }, (err) => {
+          if (done) return
+          reject(err)
+        })
+      readStream.pipe(meter).pipe(sizeStream).pipe(body)
+    })
+
+    debug(`new parts ${newParts}`)
+    debug(`uploaded ${bytesUploaded} bytes`)
+    // Upload completed!
+    debug(`uploadLength is ${uploadLength}`)
+    debug(`bytesUploaded is ${bytesUploaded}`)
+
+    if (uploadOffset + bytesUploaded === uploadLength) {
+      debug('Completing upload!')
+      const Parts = [
+        ...parts,
+        ...newParts,
+      ]
+
+      // Make sure length is right:
+      const sizeOfParts = Parts.map(({ Size }) => Size).reduce((a, b) => a + b, 0)
+      if (sizeOfParts !== uploadLength) {
+        throw new Error(
+          `size of part mismatch, expected ${uploadLength} bytes but got ${sizeOfParts} bytes`
+        )
+      }
+
+      const preparePartForParams = ({ ETag, PartNumber }) => ({ ETag, PartNumber })
+      const MultipartUpload = {
+        Parts: Parts.map(preparePartForParams),
+      }
+      const completeUploadParams = buildParams(key, {
+        MultipartUpload,
+        UploadId: uploadId,
+      })
+      debug(completeUploadParams.MultipartUpload)
+      return client.completeMultipartUpload(completeUploadParams)
+        .promise()
+    } else if (bytesUploaded < minPartSize) {
+      throw new Error(
+        `Uploaded ${bytesUploaded} bytes but minPartSize is ${minPartSize} bytes`
+      )
+    } else {
+      debug('upload not completed yet')
+    }
+  }
+  */
+
+  const createReadStream = key => client
+    .getObject(buildParams(key))
+    .createReadStream()
 
   return {
     info,
     create,
-    write,
+    append,
     createReadStream,
-    minPartSize,
+    minChunkSize: minPartSize,
   }
 }
