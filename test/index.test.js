@@ -53,12 +53,12 @@ const createBucket = async () => {
 
 const setup = async () => {
   await createBucket()
-  return await initS3Store({ client, bucket })
+  return initS3Store({ client, bucket })
 }
 
 const teardown = async () => {
   await clearBucket()
-  return await client.deleteBucket({ Bucket }).promise()
+  return client.deleteBucket({ Bucket }).promise()
 }
 
 testStore({ setup, teardown })

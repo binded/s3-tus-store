@@ -113,20 +113,22 @@ export default ({
     })).promise()
   }
 
-  const getParts = async (uploadId) => (
-    await client.listParts(buildParams(null, {
+  const getParts = async (uploadId, key) => {
+    const { Parts = [] } = await client.listParts(buildParams(key, {
       UploadId: uploadId,
-    })).promise().Parts
-  )
+    })).promise()
+    debug(Parts)
+    return Parts
+  }
   const countSizeFromParts = (parts) => parts
     .map(({ Size }) => Size)
     .reduce((total, size) => total + size, 0)
 
-  const getUploadOffset = async (uploadIdOrParts) => {
+  const getUploadOffset = async (uploadIdOrParts, key) => {
     if (Array.isArray(uploadIdOrParts)) {
       return countSizeFromParts(uploadIdOrParts)
     }
-    const parts = await getParts(uploadIdOrParts)
+    const parts = await getParts(uploadIdOrParts, key)
     if (!Array.isArray(parts)) {
       throw new Error('this should never happen')
     }
@@ -152,7 +154,8 @@ export default ({
 
   const info = async uploadId => {
     const upload = await getUpload(uploadId)
-    const offset = await getUploadOffset(uploadId)
+    debug(upload)
+    const offset = await getUploadOffset(uploadId, upload.key)
     return {
       offset,
       ...upload,
@@ -217,7 +220,7 @@ export default ({
     debug('append opts', opts)
 
     const upload = await getUpload(uploadId)
-    const parts = await getParts(uploadId)
+    const parts = await getParts(uploadId, upload.key)
     const offset = await getUploadOffset(parts)
 
     if (Number.isInteger(expectedOffset)) {
