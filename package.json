@@ -20,7 +20,7 @@
     "type": "git",
     "url": "git+https://github.com/blockai/s3-tus-store.git"
   },
-  "keywords": [],
+  "keywords": ["tus", "resumable", "upload", "abstract-tus-store", "store", "s3", "minio"],
   "author": "Oli Lalonde <olalonde@gmail.com> (https://syskall.com/)",
   "license": "MIT",
   "bugs": {
