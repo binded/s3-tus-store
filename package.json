@@ -54,7 +54,7 @@
     }
   },
   "dependencies": {
-    "abstract-tus-store": "^1.1.0",
+    "abstract-tus-store": "^1.2.0",
     "aws-sdk": "^2.6.3",
     "common-streams": "^1.1.0",
     "debug": "^2.2.0",
