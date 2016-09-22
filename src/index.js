@@ -2,6 +2,7 @@ import initDebug from 'debug'
 import toObject from 'to-object-reducer'
 import MeterStream from 'meterstream'
 import { PassThrough } from 'stream'
+import duplexify from 'duplexify'
 // import { SizeStream } from 'common-streams'
 import { errors } from 'abstract-tus-store'
 // import { inspect } from 'util'
@@ -179,11 +180,11 @@ export default ({
     return meterStream
   }
 
-  const afterWrite = async (uploadId, uploadLength, key, parts) => {
+  const afterWrite = async (uploadId, upload, parts) => {
     const offset = await getUploadOffset(parts)
     // Upload complete!
     debug(`offset = ${offset}`)
-    if (offset === uploadLength) {
+    if (offset === upload.uploadLength) {
       debug('Completing upload!')
         // TODO: completeMultipartUpload
       const MultipartUpload = {
@@ -192,14 +193,21 @@ export default ({
       const completeUploadParams = buildParams(null, {
         MultipartUpload,
         UploadId: uploadId,
-        Key: key,
+        Key: upload.key,
       })
       debug(completeUploadParams.MultipartUpload)
       await client
         .completeMultipartUpload(completeUploadParams)
         .promise()
       // TODO: remove upload file?
-      return { offset, complete: true }
+      return {
+        offset,
+        complete: true,
+        upload: {
+          ...upload,
+          offset,
+        },
+      }
     }
     /*
     const lastPart = parts[parts.length - 1]
@@ -268,15 +276,31 @@ export default ({
     debug('new parts:')
     debug(newParts)
 
-    return afterWrite(uploadId, upload.uploadLength, upload.key, [
+    return afterWrite(uploadId, upload, [
       ...parts,
       ...newParts,
     ])
   }
 
-  const createReadStream = key => client
-    .getObject(buildParams(key))
-    .createReadStream()
+  const createReadStream = (key, onInfo) => {
+    const rs = duplexify()
+    const letsgo = async () => {
+      const body = client
+        .getObject(buildParams(key))
+        .createReadStream()
+      rs.setReadable(body)
+      // https://github.com/aws/aws-sdk-js/issues/1153
+      if (onInfo) {
+        const data = await client.headObject(buildParams(key)).promise()
+        onInfo({
+          contentLength: parseInt(data.ContentLength, 10),
+          metadata: data.Metadata,
+        })
+      }
+    }
+    letsgo()
+    return rs
+  }
 
   return {
     info,
