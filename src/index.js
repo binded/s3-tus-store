@@ -87,10 +87,14 @@ export default ({
     const metadata = uploadMetadata
     // Values must be strings... :(
     // TODO: test what happens with non ASCII keys/values
-    return Object
+    const validMetadata = Object
       .keys(metadata)
       .map(key => ([key, `${metadata[key]}`]))
+      // strip non US ASCII characters
+      .map(([key, str]) => [key, Buffer.from(str).toString('ascii')])
+      .map(([key, str]) => [key, encodeURIComponent(str)])
       .reduce(toObject, {})
+    return validMetadata
   }
 
   const getUploadKey = (uploadId) => `tus-uploads/${uploadId}`
@@ -112,7 +116,7 @@ export default ({
     const json = JSON.stringify(upload)
     await client.putObject(buildParams(key, {
       Body: json,
-      ContentLength: json.length,
+      ContentLength: Buffer.byteLength(json),
     })).promise()
   }
 

@@ -20,7 +20,15 @@
     "type": "git",
     "url": "git+https://github.com/blockai/s3-tus-store.git"
   },
-  "keywords": ["tus", "resumable", "upload", "abstract-tus-store", "store", "s3", "minio"],
+  "keywords": [
+    "tus",
+    "resumable",
+    "upload",
+    "abstract-tus-store",
+    "store",
+    "s3",
+    "minio"
+  ],
   "author": "Oli Lalonde <olalonde@gmail.com> (https://syskall.com/)",
   "license": "MIT",
   "bugs": {
@@ -55,7 +63,7 @@
     }
   },
   "dependencies": {
-    "abstract-tus-store": "^1.4.0",
+    "abstract-tus-store": "^1.4.1",
     "aws-sdk": "^2.6.3",
     "common-streams": "^1.1.0",
     "debug": "^2.2.0",
