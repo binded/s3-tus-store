@@ -91,13 +91,21 @@ export default ({
       .keys(metadata)
       .map(key => ([key, `${metadata[key]}`]))
       // strip non US ASCII characters
-      .map(([key, str]) => [key, Buffer.from(str).toString('ascii')])
-      .map(([key, str]) => [key, encodeURIComponent(str)])
+      .map(([key, str]) => [key, Buffer.from(str, 'ascii').toString('ascii')])
       .reduce(toObject, {})
     return validMetadata
   }
 
   const getUploadKey = (uploadId) => `tus-uploads/${uploadId}`
+  const getUploadKeyForKey = (key) => `${key}.upload`
+
+  const getUploadForKey = async (key) => {
+    const { Body } = await client
+      .getObject(buildParams(getUploadKeyForKey(key)))
+      .promise()
+    return JSON.parse(Body)
+  }
+
   const getUpload = async (uploadId) => {
     const { Body } = await client
       .getObject(buildParams(getUploadKey(uploadId)))
@@ -114,6 +122,18 @@ export default ({
   const saveUpload = async (uploadId, upload) => {
     const key = getUploadKey(uploadId)
     const json = JSON.stringify(upload)
+    await client.putObject(buildParams(key, {
+      Body: json,
+      ContentLength: Buffer.byteLength(json),
+    })).promise()
+  }
+
+  const saveUploadForKey = async (uploadId, upload) => {
+    const key = getUploadKeyForKey(upload.key)
+    const json = JSON.stringify({
+      ...upload,
+      uploadId,
+    })
     await client.putObject(buildParams(key, {
       Body: json,
       ContentLength: Buffer.byteLength(json),
@@ -203,6 +223,7 @@ export default ({
       await client
         .completeMultipartUpload(completeUploadParams)
         .promise()
+      await saveUploadForKey(uploadId, upload)
       // TODO: remove upload file?
       return {
         offset,
@@ -295,10 +316,12 @@ export default ({
       rs.setReadable(body)
       // https://github.com/aws/aws-sdk-js/issues/1153
       if (onInfo) {
-        const data = await client.headObject(buildParams(key)).promise()
+        // const data = await client.headObject(buildParams(key)).promise()
+        // S3 metadata sucks...
+        const { uploadLength, metadata } = await getUploadForKey(key)
         onInfo({
-          contentLength: parseInt(data.ContentLength, 10),
-          metadata: data.Metadata,
+          metadata,
+          contentLength: uploadLength,
         })
       }
     }
