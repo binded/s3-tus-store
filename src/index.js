@@ -208,6 +208,10 @@ export default ({
     const offset = await getUploadOffset(parts)
     // Upload complete!
     debug(`offset = ${offset}`)
+    // TODO: what happens if process crashes here? multipart upload never completes...
+    // So, when we get HEAD (info()) request and the offset === uploadLength, we have to
+    // check that the multipart upload was really completed and if not, complete it before
+    // returning a response
     if (offset === upload.uploadLength) {
       debug('Completing upload!')
         // TODO: completeMultipartUpload
