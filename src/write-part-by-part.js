@@ -160,6 +160,9 @@ export default (opts = {}) => new Promise((resolve, reject) => {
   }
 
   body
+    .on('error', (err) => {
+      reject(err)
+    })
     .pipe(streamSplitter(maxPartSize, onSplit))
     .on('finish', () => {
       if (done) return
