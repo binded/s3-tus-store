@@ -39,7 +39,6 @@
     "node": ">=6"
   },
   "devDependencies": {
-    "abstract-tus-store": "^1.1.0",
     "babel-cli": "^6.14.0",
     "babel-preset-blockai": "^1.0.0",
     "babel-tape-runner": "^2.0.1",
@@ -63,7 +62,7 @@
     }
   },
   "dependencies": {
-    "abstract-tus-store": "^1.4.1",
+    "abstract-tus-store": "^1.5.0",
     "aws-sdk": "^2.6.3",
     "common-streams": "^1.1.0",
     "debug": "^2.2.0",

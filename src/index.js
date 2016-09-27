@@ -184,6 +184,15 @@ export default ({
     const upload = await getUpload(uploadId)
     debug(upload)
     const offset = await getUploadOffset(uploadId, upload.key)
+      .then(uploadOffset => {
+        if (uploadOffset === upload.uploadLength) {
+          // upload is completed but completeMultipartUpload has not been
+          // called for some reason...
+          // force a last call to append :/
+          return uploadOffset - 1
+        }
+        return uploadOffset
+      })
       .catch(err => {
         // we got the upload file but upload part does not exist
         // that means the upload is actually completed.
@@ -204,7 +213,12 @@ export default ({
     return meterStream
   }
 
-  const afterWrite = async (uploadId, upload, parts) => {
+  const afterWrite = async (
+      uploadId,
+      upload,
+      beforeComplete,
+      parts,
+    ) => {
     const offset = await getUploadOffset(parts)
     // Upload complete!
     debug(`offset = ${offset}`)
@@ -214,7 +228,7 @@ export default ({
     // returning a response
     if (offset === upload.uploadLength) {
       debug('Completing upload!')
-        // TODO: completeMultipartUpload
+      await beforeComplete(upload, uploadId)
       const MultipartUpload = {
         Parts: parts.map(({ ETag, PartNumber }) => ({ ETag, PartNumber })),
       }
@@ -264,6 +278,7 @@ export default ({
       }
       return { expectedOffset: arg3, opts: arg4 }
     })()
+    const { beforeComplete = async () => {} } = opts
     // need to do this asap to make sure we don't miss reads
     const through = rs.pipe(new PassThrough())
 
@@ -272,6 +287,13 @@ export default ({
     const upload = await getUpload(uploadId)
     const parts = await getParts(uploadId, upload.key)
     const offset = await getUploadOffset(parts)
+
+    // For some reason, upload is finished but not completed yet
+    if (offset === upload.uploadLength) {
+      if (!Number.isInteger(expectedOffset) || expectedOffset === upload.uploadLength - 1) {
+        return afterWrite(uploadId, upload, beforeComplete, parts)
+      }
+    }
 
     if (Number.isInteger(expectedOffset)) {
       // check if offset is right
@@ -302,10 +324,7 @@ export default ({
       body: through.pipe(limitStream), // .pipe(sizeStream),
     })
 
-    debug('new parts:')
-    debug(newParts)
-
-    return afterWrite(uploadId, upload, [
+    return afterWrite(uploadId, upload, beforeComplete, [
       ...parts,
       ...newParts,
     ])
