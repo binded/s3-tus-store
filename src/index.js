@@ -97,7 +97,7 @@ export default ({
   }
 
   const getUploadKey = (uploadId) => `tus-uploads/${uploadId}`
-  const getUploadKeyForKey = (key) => `${key}.upload`
+  const getUploadKeyForKey = (key) => `tus-uploads/finished/${key}.upload`
 
   const getUploadForKey = async (key) => {
     const { Body } = await client
@@ -241,10 +241,10 @@ export default ({
         Key: upload.key,
       })
       debug(completeUploadParams.MultipartUpload)
+      await saveUploadForKey(uploadId, upload)
       await client
         .completeMultipartUpload(completeUploadParams)
         .promise()
-      await saveUploadForKey(uploadId, upload)
       // TODO: remove upload file?
       return {
         offset,
@@ -255,21 +255,6 @@ export default ({
         },
       }
     }
-    /*
-    const lastPart = parts[parts.length - 1]
-    if (lastPart.Size < minPartSize) {
-      debug('Lost a few bytes!')
-      // Oops... we only wrote bytesInLastPart bytes in the
-      // last part but minimum is minPartSize :(
-      // TODO: do we need to manually delete the part or
-      // will S3 get rid of it automatically when
-      // we upload a new part? if S3 only deletes it when
-      // uploading a new part, we need to make sure we ignore
-      // parts with size < minPartSize when calculating the
-      // next part number and/or offset
-      return { offset: offset - lastPart.Size }
-    }
-    */
     return { offset }
   }
 
