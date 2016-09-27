@@ -154,6 +154,7 @@ export default ({
 
   const getUploadOffset = async (uploadIdOrParts, key) => {
     if (Array.isArray(uploadIdOrParts)) {
+      debug('parts', uploadIdOrParts)
       return countSizeFromParts(uploadIdOrParts)
     }
     const parts = await getParts(uploadIdOrParts, key)
@@ -208,7 +209,9 @@ export default ({
   }
 
   const createLimitStream = (uploadLength, offset) => {
-    if (typeof uploadLength === 'undefined') return new PassThrough()
+    if (typeof uploadLength === 'undefined') {
+      return new PassThrough()
+    }
     const meterStream = new MeterStream(uploadLength - offset)
     return meterStream
   }
