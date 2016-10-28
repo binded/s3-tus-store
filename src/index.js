@@ -7,6 +7,7 @@ import duplexify from 'duplexify'
 import { errors } from 'abstract-tus-store'
 // import { inspect } from 'util'
 
+import eos from './eos'
 import writePartByPart from './write-part-by-part'
 
 // TODO: docs below slightly outdated!
@@ -84,6 +85,7 @@ export default ({
   })
 
   const buildS3Metadata = (uploadMetadata = {}) => {
+    debug('buildS3Metadata')
     const metadata = uploadMetadata
     // Values must be strings... :(
     // TODO: test what happens with non ASCII keys/values
@@ -100,6 +102,7 @@ export default ({
   const getUploadKeyForKey = (key) => `tus-uploads/finished/${key}.upload`
 
   const getUploadForKey = async (key) => {
+    debug('buildS3Metadata', { key })
     const { Body } = await client
       .getObject(buildParams(getUploadKeyForKey(key)))
       .promise()
@@ -107,6 +110,7 @@ export default ({
   }
 
   const getUpload = async (uploadId) => {
+    debug('getUpload', { uploadId })
     const { Body } = await client
       .getObject(buildParams(getUploadKey(uploadId)))
       .promise()
@@ -120,6 +124,7 @@ export default ({
   }
 
   const saveUpload = async (uploadId, upload) => {
+    debug('saveUpload', { uploadId, upload })
     const key = getUploadKey(uploadId)
     const json = JSON.stringify(upload)
     await client.putObject(buildParams(key, {
@@ -129,6 +134,7 @@ export default ({
   }
 
   const saveUploadForKey = async (uploadId, upload) => {
+    debug('saveUploadForKey', { uploadId, upload })
     const key = getUploadKeyForKey(upload.key)
     const json = JSON.stringify({
       ...upload,
@@ -144,7 +150,7 @@ export default ({
     const { Parts = [] } = await client.listParts(buildParams(key, {
       UploadId: uploadId,
     })).promise()
-    debug(Parts)
+    debug('getParts', Parts)
     return Parts
   }
 
@@ -153,6 +159,7 @@ export default ({
     .reduce((total, size) => total + size, 0)
 
   const getUploadOffset = async (uploadIdOrParts, key) => {
+    debug('getUploadOffset', { uploadIdOrParts, key })
     if (Array.isArray(uploadIdOrParts)) {
       debug('parts', uploadIdOrParts)
       return countSizeFromParts(uploadIdOrParts)
@@ -168,6 +175,7 @@ export default ({
     uploadLength,
     metadata = {},
   }) => {
+    debug('create', { key })
     const { UploadId } = await client.createMultipartUpload(buildParams(key, {
       Metadata: buildS3Metadata(metadata),
     })).promise()
@@ -182,6 +190,7 @@ export default ({
   }
 
   const info = async uploadId => {
+    debug('info', { uploadId })
     const upload = await getUpload(uploadId)
     debug(upload)
     const offset = await getUploadOffset(uploadId, upload.key)
@@ -240,8 +249,8 @@ export default ({
         UploadId: uploadId,
         Key: upload.key,
       })
-      debug(completeUploadParams.MultipartUpload)
       await saveUploadForKey(uploadId, upload)
+      debug('completeUpload', { completeUploadParams })
       await client
         .completeMultipartUpload(completeUploadParams)
         .promise()
@@ -266,9 +275,12 @@ export default ({
       }
       return { expectedOffset: arg3, opts: arg4 }
     })()
+    debug('append', { uploadId, expectedOffset })
     const { beforeComplete = async () => {} } = opts
+
     // need to do this asap to make sure we don't miss reads
     const through = rs.pipe(new PassThrough())
+    const rsEos = eos(rs)
 
     debug('append opts', opts)
 
@@ -291,6 +303,7 @@ export default ({
     }
 
     const limitStream = createLimitStream(upload.uploadLength, offset)
+    const limitStreamEos = eos(limitStream)
 
     // Parts are 1-indexed
     const nextPartNumber = parts.length
@@ -312,6 +325,10 @@ export default ({
       body: through.pipe(limitStream), // .pipe(sizeStream),
     })
 
+    // This ensures that if either stream emitted an error,
+    // our promise will throw
+    await Promise.all([rsEos, limitStreamEos])
+
     return afterWrite(uploadId, upload, beforeComplete, [
       ...parts,
       ...newParts,
@@ -319,6 +336,7 @@ export default ({
   }
 
   const createReadStream = (key, onInfo) => {
+    debug('createReadStream', { key })
     const rs = duplexify()
     const letsgo = async () => {
       const body = client
@@ -327,6 +345,7 @@ export default ({
       rs.setReadable(body)
       // https://github.com/aws/aws-sdk-js/issues/1153
       if (onInfo) {
+        debug('onInfo', { key })
         // const data = await client.headObject(buildParams(key)).promise()
         // S3 metadata sucks...
         const { uploadLength, metadata } = await getUploadForKey(key)

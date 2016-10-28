@@ -1,6 +1,6 @@
 {
   "name": "s3-tus-store",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "",
   "main": "./lib/index.js",
   "directories": {
@@ -67,6 +67,7 @@
     "common-streams": "^1.1.0",
     "debug": "^2.2.0",
     "duplexify": "^3.4.5",
+    "end-of-stream": "^1.1.0",
     "fixed-size-stream-splitter": "^1.1.0",
     "meterstream": "^1.0.1",
     "to-object-reducer": "^1.0.1"

@@ -3,6 +3,7 @@ import initDebug from 'debug'
 import { SizeStream } from 'common-streams'
 import { PassThrough } from 'stream'
 
+import eos from './eos'
 import createTmpFile from './tmp-file'
 
 const debug = initDebug('s3-tus-store')
@@ -47,26 +48,31 @@ const uploadPart = async (rs, guessedPartSize, partNumber, {
   // Ensure body is not smaller than content length,
   // otherwise requests stall indefinitely.
   const tmpFile = await createTmpFile()
-  debug(tmpFile.path)
+  debug('tmpFile path', tmpFile.path)
 
-  const fileWrittenPromise = new Promise((resolve, reject) => {
-    through
-      .pipe(tmpFile.createWriteStream())
-      .on('error', (err) => reject(err))
-      .on('finish', () => resolve())
-  })
+  // In parallel, we write to a temporary file to resume
+  // in case original stream fails (we guessed part size wrong)
+  const fileWrittenPromise = eos(
+    through.pipe(tmpFile.createWriteStream())
+  )
+
   const streamSizePromise = new Promise((resolve) => {
     through
       .pipe(new SizeStream((byteCount) => {
+        // This will resolve once the upload to S3 is done
         resolve(byteCount)
       }))
+      // Upload to S3 hasn't started yet
       .pipe(Body)
   })
 
   let actualSize
+  // Wait for upload to complete
   streamSizePromise.then((size) => {
     actualSize = size
     if (size < guessedPartSize) {
+      debug('Oops, our guessedPartSize was larger than actualSize')
+      // make sure request is aborted
       request.abort()
     }
   })
@@ -75,20 +81,27 @@ const uploadPart = async (rs, guessedPartSize, partNumber, {
   // tmp file is written and try to upload its content
   // with correct content length
   const planB = async () => {
-    // Nothing we can do.. short of uploading to a S3 key...
-    // and rewriting later when we have a new write? TODO
     debug('plan B')
     debug(`actualSize = ${actualSize}`)
     debug(`minPartSize = ${minPartSize}`)
     if (actualSize < minPartSize) {
+      // Nothing we can do.. short of uploading to a S3 key...
+      // and rewriting later when we have a new write? TODO
+      // PS: we always guess the size of the last part correctly
+      // so this is never called for the last part
       tmpFile.rm() // dont need wait for this...
-      return
+      throw new Error(`Upload parts must be at least ${minPartSize}`)
     }
-    // make sure file completely written to disk...
+    // make sure temporary was file completely written to disk...
     await fileWrittenPromise
+    const tmpFileRs = tmpFile.createReadStream()
+
+    // Captures errors so we dont get uncaught error events
+    const tmpFileRsEos = eos(tmpFileRs)
+
     const { ETag } = await client.uploadPart({
       ...baseParams,
-      Body: tmpFile.createReadStream(),
+      Body: tmpFileRs,
       ContentLength: actualSize,
     }).promise()
 
@@ -96,6 +109,10 @@ const uploadPart = async (rs, guessedPartSize, partNumber, {
 
     // TODO: put whole function in try/catch to make sure tmpfile
     // remove even when errors...
+
+    // Make sure tmp file read stream didn't emit an error
+    await tmpFileRsEos
+
     return {
       ETag,
       PartNumber: partNumber,
@@ -143,6 +160,7 @@ export default (opts = {}) => new Promise((resolve, reject) => {
     const partNumber = nextPartNumber + splitIndex
     const bytesWritten = splitIndex * maxPartSize
     const bytesRemaining = bytesLimit - bytesWritten
+    // We always guess the size of the last part correctly
     const guessedPartSize = Math.min(bytesRemaining, maxPartSize)
     // wait for previous uploadPart operation to complete
     promise = promise
@@ -164,6 +182,7 @@ export default (opts = {}) => new Promise((resolve, reject) => {
       reject(err)
     })
     .pipe(streamSplitter(maxPartSize, onSplit))
+    .on('error', reject)
     .on('finish', () => {
       if (done) return
       // Make sure all upload part promises are completed...
