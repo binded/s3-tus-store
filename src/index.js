@@ -46,7 +46,7 @@ import writePartByPart from './write-part-by-part'
 // Therefore, HEAD responses will always contain the unchanged metadata, Base64-
 // encoded, even if it contains non-ASCII characters.
 
-const debug = initDebug('s3-tus-store')
+const debug = initDebug('s3-tus-store:index')
 
 const defaults = {
   // MaxPartSize specifies the maximum size of a single part uploaded to S3
@@ -192,7 +192,7 @@ export default ({
   const info = async uploadId => {
     debug('info', { uploadId })
     const upload = await getUpload(uploadId)
-    debug(upload)
+    debug('got upload', upload)
     const offset = await getUploadOffset(uploadId, upload.key)
       .then(uploadOffset => {
         if (uploadOffset === upload.uploadLength) {
@@ -280,7 +280,7 @@ export default ({
 
     // need to do this asap to make sure we don't miss reads
     const through = rs.pipe(new PassThrough())
-    const rsEos = eos(rs)
+    const rsEos = eos(rs, { writable: false })
 
     debug('append opts', opts)
 
@@ -303,7 +303,7 @@ export default ({
     }
 
     const limitStream = createLimitStream(upload.uploadLength, offset)
-    const limitStreamEos = eos(limitStream)
+    const limitStreamEos = eos(limitStream, { writable: false })
 
     // Parts are 1-indexed
     const nextPartNumber = parts.length
@@ -320,10 +320,12 @@ export default ({
       nextPartNumber,
       maxPartSize,
       minPartSize,
+      // Number of bytes remaining to complete upload
       bytesLimit,
       key: upload.key,
       body: through.pipe(limitStream), // .pipe(sizeStream),
     })
+    debug('writePartByPart done')
 
     // This ensures that if either stream emitted an error,
     // our promise will throw

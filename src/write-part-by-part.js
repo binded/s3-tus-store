@@ -6,7 +6,7 @@ import { PassThrough } from 'stream'
 import eos from './eos'
 import createTmpFile from './tmp-file'
 
-const debug = initDebug('s3-tus-store')
+const debug = initDebug('s3-tus-store:partbypart')
 
 const uploadPart = async (rs, guessedPartSize, partNumber, {
   client,
@@ -15,6 +15,14 @@ const uploadPart = async (rs, guessedPartSize, partNumber, {
   minPartSize,
   key,
 }) => {
+  debug('uploadPart', {
+    guessedPartSize,
+    partNumber,
+    bucket,
+    key,
+    uploadId,
+    minPartSize,
+  }, { bucket, key, uploadId })
   //
   // Optimistically guess that Content-Length is guessedPartSize
   // but keep a temporary copy on disk in case the stream ends
@@ -52,6 +60,8 @@ const uploadPart = async (rs, guessedPartSize, partNumber, {
 
   // In parallel, we write to a temporary file to resume
   // in case original stream fails (we guessed part size wrong)
+  // We always guess right part size for last part so no need for temp
+  // file.
   const fileWrittenPromise = eos(
     through.pipe(tmpFile.createWriteStream())
   )
@@ -71,6 +81,8 @@ const uploadPart = async (rs, guessedPartSize, partNumber, {
   streamSizePromise.then((size) => {
     actualSize = size
     if (size < guessedPartSize) {
+      debug('actualSize', actualSize)
+      debug('guessedPartSize', guessedPartSize)
       debug('Oops, our guessedPartSize was larger than actualSize')
       // make sure request is aborted
       request.abort()
@@ -97,21 +109,21 @@ const uploadPart = async (rs, guessedPartSize, partNumber, {
     const tmpFileRs = tmpFile.createReadStream()
 
     // Captures errors so we dont get uncaught error events
-    const tmpFileRsEos = eos(tmpFileRs)
+    const tmpFileRsEos = eos(tmpFileRs, { writable: false })
 
-    const { ETag } = await client.uploadPart({
-      ...baseParams,
-      Body: tmpFileRs,
-      ContentLength: actualSize,
-    }).promise()
+    const [{ ETag }] = await Promise.all([
+      client.uploadPart({
+        ...baseParams,
+        Body: tmpFileRs,
+        ContentLength: actualSize,
+      }).promise(),
+      tmpFileRsEos,
+    ])
 
     tmpFile.rm() // dont need wait for this
 
     // TODO: put whole function in try/catch to make sure tmpfile
     // remove even when errors...
-
-    // Make sure tmp file read stream didn't emit an error
-    await tmpFileRsEos
 
     return {
       ETag,
@@ -150,25 +162,30 @@ export default (opts = {}) => new Promise((resolve, reject) => {
     bytesLimit,
     nextPartNumber,
   } = opts
+  debug('writePartByPart', { bytesLimit, nextPartNumber })
   let done = false
   let promise = Promise.resolve()
 
   let splitIndex = 0
   const newParts = []
   const onSplit = (rs) => {
+    debug('onSplit')
     if (done) return
     const partNumber = nextPartNumber + splitIndex
     const bytesWritten = splitIndex * maxPartSize
+    debug('bytesWritten', bytesWritten)
     const bytesRemaining = bytesLimit - bytesWritten
     // We always guess the size of the last part correctly
     const guessedPartSize = Math.min(bytesRemaining, maxPartSize)
     // wait for previous uploadPart operation to complete
     promise = promise
-      .then(() => (
-        uploadPart(rs, guessedPartSize, partNumber, opts)
-      ))
+      .then(() => {
+        debug('calling uploadPart', { bytesWritten })
+        return uploadPart(rs, guessedPartSize, partNumber, opts)
+      })
       .then(newPart => {
         newParts.push(newPart)
+        debug('newParts', newParts)
       })
       .catch((err) => {
         done = true
@@ -186,6 +203,9 @@ export default (opts = {}) => new Promise((resolve, reject) => {
     .on('finish', () => {
       if (done) return
       // Make sure all upload part promises are completed...
-      promise.then(() => { resolve(newParts) }).catch(reject)
+      promise.then(() => {
+        resolve(newParts)
+      })
+      .catch(reject)
     })
 })
