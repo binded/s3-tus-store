@@ -250,10 +250,11 @@ export default ({
         Key: upload.key,
       })
       await saveUploadForKey(uploadId, upload)
-      debug('completeUpload', { completeUploadParams })
+      debug('s3.completeMultipartUpload start', { completeUploadParams })
       await client
         .completeMultipartUpload(completeUploadParams)
         .promise()
+      debug('s3.completeMultipartUpload end')
       // TODO: remove upload file?
       return {
         offset,
