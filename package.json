@@ -1,6 +1,6 @@
 {
   "name": "s3-tus-store",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "",
   "main": "./lib/index.js",
   "directories": {
@@ -63,7 +63,7 @@
   },
   "dependencies": {
     "abstract-tus-store": "^1.5.0",
-    "aws-sdk": "^2.6.3",
+    "aws-sdk": "^2.6.12",
     "common-streams": "^1.1.0",
     "debug": "^2.2.0",
     "duplexify": "^3.4.5",

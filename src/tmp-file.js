@@ -1,8 +1,12 @@
 import os from 'os'
 import fs from 'fs'
 import { join } from 'path'
+import initDebug from 'debug'
+
+const debug = initDebug('s3-tus-store')
 
 export default async (prefix = 's3-tus-store') => {
+  debug('create tmp file')
   const dir = await new Promise((resolve, reject) => {
     fs.mkdtemp(join(os.tmpDir(), prefix), (err, result) => {
       if (err) return reject(err)
