@@ -101,7 +101,6 @@ const uploadPart = async (rs, guessedPartSize, partNumber, {
       // and rewriting later when we have a new write? TODO
       // PS: we always guess the size of the last part correctly
       // so this is never called for the last part
-      tmpFile.rm() // dont need wait for this...
       throw new Error(`Upload parts must be at least ${minPartSize}`)
     }
     // make sure temporary was file completely written to disk...
@@ -119,8 +118,6 @@ const uploadPart = async (rs, guessedPartSize, partNumber, {
       }).promise(),
       tmpFileRsEos,
     ])
-
-    tmpFile.rm() // dont need wait for this
 
     // TODO: put whole function in try/catch to make sure tmpfile
     // remove even when errors...
@@ -153,6 +150,14 @@ const uploadPart = async (rs, guessedPartSize, partNumber, {
     })
     */
   return planA()
+    .catch((err) => {
+      tmpFile.rm() // dont need to block for this...
+      throw err
+    })
+    .then((result) => {
+      tmpFile.rm() // dont need to block for this...
+      return result
+    })
 }
 
 export default (opts = {}) => new Promise((resolve, reject) => {
