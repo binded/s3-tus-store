@@ -39,3 +39,5 @@ test/.minio
 # Build directory
 lib/
 .npmrc
+.nyc_output/
+coverage/

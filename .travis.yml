@@ -9,6 +9,8 @@ node_js:
 before_script:
   - mkdir -p test/.minio
   - docker-compose up -d
+after_script:
+  - cat ./coverage/lcov.info | ./node_modules/coveralls/bin/coveralls.js
 env:
   global:
     - S3_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE
