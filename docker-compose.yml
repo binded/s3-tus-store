@@ -5,6 +5,7 @@ minio:
   volumes:
     - ./test/.minio/data:/export
     - ./test/.minio/config:/root/.minio
+  command: server /export
   environment:
     - "MINIO_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE"
     - "MINIO_SECRET_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
