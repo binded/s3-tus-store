@@ -70,6 +70,8 @@ const defaults = {
   minPartSize: 5 * 1024 * 1024,
 }
 
+const asciiOnly = str => str.replace(/[^\x00-\x7F]/g, '')
+
 // TODO: optional TTL?
 // TODO: MAKE SURE UPLOADID IS UNIQUE REGARDLESS OF KEY
 export default ({
@@ -93,7 +95,7 @@ export default ({
       .keys(metadata)
       .map(key => ([key, `${metadata[key]}`]))
       // strip non US ASCII characters
-      .map(([key, str]) => [key, Buffer.from(str, 'ascii').toString('ascii')])
+      .map(([key, str]) => [key, asciiOnly(str)])
       .reduce(toObject, {})
     return validMetadata
   }
