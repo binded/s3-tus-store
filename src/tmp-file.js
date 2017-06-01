@@ -6,7 +6,7 @@ import initDebug from 'debug'
 const debug = initDebug('s3-tus-store:tmpfile')
 
 export default async (prefix = 's3-tus-store') => {
-  const tmpDirPath = join(os.tmpDir(), prefix)
+  const tmpDirPath = join(os.tmpdir(), prefix)
   debug('create tmp dir', { tmpDirPath })
   const dir = await new Promise((resolve, reject) => {
     fs.mkdtemp(tmpDirPath, (err, result) => {
